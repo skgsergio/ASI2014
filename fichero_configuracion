@@ -1,0 +1,9 @@
+# Máquina servidora
+192.168.0.1 raid raid.conf
+192.168.0.1 mount mount_raid.conf
+192.168.0.1 nfs_server nfs_server.conf
+# Máquinas cliente
+192.168.0.2 nfs_client nfs_client.conf         
+192.168.0.3 nfs_client nfs_client.conf #a
+192.168.0.4 nfs_client nfs_client.conf                 # a dssdf
+192.168.0.5 nfs_client nfs_client.conf #asdfdsf sdf

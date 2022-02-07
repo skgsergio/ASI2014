@@ -1,0 +1,275 @@
+#+TITLE: Administración de sistemas UNIX\\Práctica /Script maestro para la configuración de un cluster Linux/
+#+AUTHOR: Sergio Conde Gómez
+#+EMAIL: sconde@XXXXXX.ls.fi.upm.es
+#+DATE: Curso 2014/2015
+#+LANGUAGE: es
+#+OPTIONS: ^:{}
+#+STARTUP: showall
+#+LATEX_CLASS_OPTIONS: [a4paper,hidelinks]
+#+LATEX_HEADER: \usepackage[spanish, es-noshorthands]{babel}
+#+LATEX_HEADER: \usepackage{parskip}
+#+LATEX_HEADER: \setlength{\parindent}{15pt}
+
+#+BEGIN_LaTeX
+\newpage
+#+END_LaTeX
+
+* Funcionamiento del script principal
+  El script principal, =configurar_cluster.sh=, primero lee línea a línea el fichero principal
+  realizando una serie de comprobaciones para detectar posibles errores y parar a tiempo. Le
+  lee todo el fichero comprobando que todas las máquinas, servicios y ficheros especificados en
+  el fichero de configuración principal existan y tengan el formato esperado. Tras las
+  comprobaciones se copian los ficheros específicos del servicio (script y fichero de configuración)
+  en la máquina remota con /scp/ para después ejecutar el script con /ssh/.
+
+  En todos los casos se mostrará una información suficientemente detallada para que el usuario
+  pueda solventar el error.
+
+** Comprobación de la existencia de la máquina
+   Para la comprobación de las máquinas se ha decidido utilizar el mandato /ssh/ tratando de crear,
+   si no existe ya, un directorio auxiliar donde subir los subscripts de cada servicio con su
+   configuración.
+
+** Comprobación del servicio a configurar
+   Hemos decidido crear un array de servicios admitidos y una vez leído el servicio que especifica
+   la configuración comprobamos si este se encuentra en nuestro array.
+
+** Comprobación de los ficheros de servicio
+   Hemos creado una función que comprueba el número de lineas de cada fichero según el servicio
+   al que pertenece. Cabe destacar que todos los ficheros de configuración deben tener un salto
+   de línea necesariamente en la última linea que contenga información.
+
+* Funcionamiento de los scripts de configuración de servicios
+  Se ha realizado la practica de forma que cada servicio tenga un script en el subdirectorio
+  =scripts_remotos= usando la nomenclatura =configurar_NOMBRE.sh=, donde =NOMBRE= es el nombre
+  del servicio que hay entre los paréntesis en cada una de las secciones siguientes.
+
+  Todos los scripts comprueban primero el formato del fichero de configuración y después realizan
+  las acciones necesarias para la instalación y configuración del servicio en concreto.
+
+** Montaje (mount)
+   Se comprueba si el dispositivo existe y es un dispositivo de bloques, si esto se cumple se crea
+   el punto de montaje y se monta el dispositivo sin especificar el tipo de ficheros para que se
+   auto detecte.
+
+   Una vez montado consultamos el tipo del sistema de ficheros mirando en =/proc/mounts= la tercera
+   columna asociada a ese dispositivo y usando esta información añadimos a =/etc/fstab= una entrada
+   para el auto montaje de este dispositivo, si no existe aún.
+
+** RAID (raid)
+   Se comprueba que el dispositivo raid a crear no exista y se comprueba que todos los dispositivos
+   que van a formar parte del raid existan y sean un dispositivo de bloques.
+
+   Tras las comprobaciones se instala la utilidad /mdadm/, si no lo está ya, y se crea el raid
+   usándola. Tras crearlo se formatea en /ext4/ para poder ser usado.
+
+** LVM (lvm)
+   En este caso la dinámica es muy similar a la de /RAID/. Se hacen las mismas comprobaciones
+   además de leer y comprobar el formato de los volúmenes lógicos a crear.
+
+   Después se instala la utilidad /lvm2/ si no lo está y se realizan la siguientes acciones:
+   * Inicialización de los volúmenes (=pvcreate=).
+   * Se crea el grupo (=vgcreate=).
+   * Se crean los volúmenes que hayan indicado (=lvcreate=) y se formatean en /ext4/.
+
+** NIS
+
+*** Servidor (nis_server)
+    Se lee el dominio del servidor NIS y se instala el paquete /nis/ si no lo está. Para la esta
+    instalación se añade una política de no inicio de demonios usando =/usr/sbin/policy-rc.d= [fn::
+    "Exit status codes: [...] 101 - action forbidden by policy" - https://people.debian.org/~hmh/invokerc.d-policyrc.d-specification.txt]
+    para evitar la tardanza de la primera ejecución si no está configurado.
+
+    Después se procede a la configuración de nis como servidor modificando el fichero
+    =/etc/default/nis= con /sed/. Luego se configura =/etc/yp.conf= para añadir /localhost/ como
+    servidor y se configura el dominio en =/etc/defaultdomain/=.
+
+    Tras estos ajustes se inicia el demonio /nis/ y se inicializa el servidor usando
+    =/usr/lib/yp/ypinit -m=. Con esto quedaría configurado el servidor.
+
+*** Cliente (nis_client)
+    La instalación se realiza de la misma forma que la hemos hecho en el servidor.
+
+    Para configurar modificamos =/etc/default/nis= para configurar el demonio como cliente y en
+    =/etc/yp.conf= añadimos el nombre de dominio o IP del servidor. Configuramos =/etc/defaultdomain=
+    como el servidor y por último iniciamos el demonio /nis/.
+
+** NFS
+
+*** Servidor (nfs_server)
+    Se leen los directorios indicados en la configuración comprobando que existen y son directorios.
+    Tras esto se instala /nfs-common/ y /nfs-kernel-server/ si no están instalados todavía.
+
+    Tras instalar los paquetes se van añadiendo los directorios leídos a =/etc/exports= con las
+    opciones /rw/, /sync/ y /no_subtree_check/ y con acceso para todo el mundo. Tras añadirlos
+    se reinicia el demonio de /nfs-kernel-server/.
+
+    Un aspecto a mejorar de esta parte sería tener en la configuración las restricciones de
+    acceso y añadirlas. También podría tenerse en cuenta alguna opción en particular que se
+    quiera usar.
+
+*** Cliente (nfs_client)
+    Se lee la configuración guardando los /exports/ en un array y se instala /nfs-common/ si no lo
+    está.
+
+    Para cada /export/ se crea su punto de montaje, se monta y se añada a //etc/fstab/ si no lo
+    está ya.
+
+    Cabe mencionar que admitimos tanto =host:/remote/export /mount/point= como
+    =host/remote/export /mount/point= en las lineas de configuración ya que no sabíamos a ciencia
+    cierta si era una errara del enunciado.
+
+** Backup
+   Para esta parte hemos valorado distintas opciones y hemos terminado usando un sistema sencillo
+   con /rsync/ conectándose vía /ssh/ en el lado del cliente y en el lado del servidor un usuario
+   para backups usando el script /rrsync/ junto a un par de claves pública-privada.
+
+   Hemos valorado otras alternativas y probablemente la mejor elección, o al menos una de las
+   mejores, sería utilizar /bacula/ [fn:: http://www.bacula.org/]. No nos hemos decantado por esta
+   opción para la practica ya que nos iba a llevar mucho tiempo ajustar las configuraciones al ser
+   un sistema tan grande y completo.
+
+*** Servidor (backup_server)
+    Instalamos /rsync/ si no lo está ya y creamos un usuario con la opción =--disabled-password=
+    [fn:: "Like =--disabled-login=, but logins are still possible (for example using SSH RSA keys)
+    but not using password authentication." - /man 8 adduser/] y como home el directorio indicado
+    en el fichero de configuración. Creamos un par de claves RSA que será utilizado para que los
+    clientes conecten para hacer el backup.
+
+    Tras crear el usuario y el par de claves creamos la carpeta bin y descomprimimos ahí el binario
+    de /rrsync/ (=/usr/share/doc/rsync/scripts/rrsync.gz=). Por último añadimos la clave pública
+    generada a =~/.ssh/authorized_keys= precedida de las opciones para restringir a lo mínimo los
+    permisos de esta clave:
+
+    command="$HOME/bin/rrsync $HOME",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding
+
+*** Cliente (backup_client)
+    Instalamos /rsync/ si no lo está ya y creamos el directorio =/etc/autobackup= donde guardar los
+    ficheros del sistema de backup.
+
+    Copiamos vía /scp/ la clave privada del servidor de backups en el directorio anterior y creamos
+    el script que se va a encargar de ejecutar /rsync/ para realizar el backup.
+
+    El script ejecuta rsync con las opciones =-e "ssh -i /etc/autobackup/id_rsa" -av= que sirven
+    para:
+    * Especificar que /shell/ remota que queremos usar es /ssh/ con la identidad que hemos copiado.
+    * Activar el modo /archive/ que indica que queremos copiar todo lo de ese directorio respetando
+      sus /flags/ (lectura, escritura, ...).
+    * Activar el modo /verbose/ por si ocurre algún error que sea fácilmente identificable por el
+      administrador en el correo que le llegará de cron.
+
+    Por último restringimos los permisos de =/etc/autobackup= y su contenido a /root/ y añadimos
+    a =/etc/crontab= una línea para que se ejecute el script creado cada el número de horas
+    indicado en la configuración.
+
+* Detalles de implementación
+
+** Modularidad
+   El script principal se ha tratado de hacer lo más modular posible de forma que para añadir un
+   nuevo servicio simplemente sea necesario añadirlo al array =$SERVICIOS= y añadir una nueva
+   entrada al =case= de la función =comprobarLineas()= indicando el número de lineas esperadas y
+   el tipo de comprobación: === para comprobar que sea exactamente ese número o =>== para que mínimo
+   sea ese número.
+
+** Expresiones regulares
+   Para las comprobaciones del formato de los ficheros de configuración se ha decidido usar las
+   expresiones regulares integradas de Bash ya que nos permite detectar patrones y obtener partes
+   de una cadena.
+
+   Podríamos haber utilizado alguna herramienta externa como /sed/ pero si estamos tratando con
+   cadenas que hay en variables del script no tiene mucho sentido ya que tienes que hacer un
+   =echo= de la misma y pasarla a /sed/ a través de un pipe y guardar su salida estándar. Por esto
+   hemos decidido usar el propio sistema de Bash.
+
+** Utilidades externas
+   Para la substitución de cadenas en ficheros de configuración del sistema se ha utilizado la
+   herramienta /sed/. Y para obtener campos de una salida que están separados por espacios o
+   tabuladores (o, incluso, una mezcla de ambos) se ha utilizado /awk/. También se utiliza /wc/
+   para contar lineas y palabras en alguna ocasión.
+
+** Instalación de paquetes
+   Para la instalación de paquetes con /apt-get/ se ha utilizado los flags =-y= para auto aceptar
+   las acciones haciendo que no sea necesaria la intervención del usuario y =-q= para reducir la
+   salida producida por la instalación.
+
+   Además /apt-get/ en ocasiones realiza preguntas de forma interactiva al respecto de ciertos
+   aspectos de configuración de los paquetes instalados. Para evitar que haga preguntas y se use
+   la configuración por defecto, que posteriormente será modificada por los scripts desarrollados,
+   se ha configurado la variable de entorno =DEBIAN_FRONTEND=noninteractive= [fn:: "On the other
+   hand, if you just want to change the frontend for a minute, you can set the DEBIAN_FRONTEND
+   environment variable to the name of the frontend to use." - /man 7 debconf/].
+
+** Autorización de fingerprints en SSH
+   /SSH/ pregunta si autorizamos a realizar una conexión con la máquina remota cuyo fingerprint[fn::
+   "A public key fingerprint is a short sequence of bytes used to authenticate or look up a longer
+   public key." - http://en.wikipedia.org/wiki/Public_key_fingerprint] nos muestra si no conoce
+   la máquina remota aún[fn:: "When connecting to a server for the first  time, a fingerprint
+   of the server's public key is presented to the user (unless the option =StrictHostKeyChecking=
+   has been disabled)." - /man 1 ssh/].
+
+   Esto es un problema de cara a la práctica ya que se pide que sea totalmente desatendida. Para
+   solventarlo hemos encontrado una forma de deshabilitar esta pregunta pero supone un riesgo si
+   quisiésemos usar este script fuera de una red local controlada por nosotros ya que podríamos
+   ser víctima de un ataque /man-in-the-middle/ [fn:: http://en.wikipedia.org/wiki/Man-in-the-middle_attack]
+   exponiendo detalles de nuestra instalación o, incluso, contraseñas y claves privadas.
+
+   Las opciones usadas para deshabilitar esta comprobación en /ssh/ y /scp/ son
+   =-oUserKnownHostsFile=/dev/null= y =-oStrictHostKeyChecking=no=.
+
+* Problemas encontrados
+
+** Bash no tiene arrays multidimensionales
+   En Bash no existen como tal estos arrays con lo cual el manejo que hemos hecho de los mismos
+   es algo /peculiar/. Para poder tener arrays que contengan vectores de 3 elementos en cada
+   posición hemos ido saltando tres posiciones y en cada salto ese elemento y los dos siguientes
+   son parte del vector:
+
+   #+BEGIN_SRC bash :exports code
+# Array de ejemplo con vectores de 3 elementos por "posición"
+# del array.
+array=(maquina1 servicio1 fichero1 maquina2 servicio2 fichero2)
+
+# Dividimos el tamaño del array entre 3 (numero de elementos por
+# vector).
+num_elementos=$((${#array[@]} / 3))
+
+# Iteramos hasta llegar al numero de elementos.
+for ((i=0; i < $num_elementos; i++)); do
+    maquina=${array[$((i*3))]}
+    servicio=${array[$((i*3 + 1))]}
+    fichero=${array[$((i*3 + 2))]}
+
+    # ...
+done
+   #+END_SRC
+
+** SSH consume la entrada estándar
+   Al principio pasamos mucho tiempo intentando averiguar el motivo de que solo se leyese la
+   primera linea de la configuración en el bucle de lectura del fichero principal. Tras investigar
+   descubrimos que /ssh/ al ser invocado dentro del bucle consumía la entrada estándar, es decir
+   que consumía las siguientes lineas del fichero principal.
+
+   Para evitar esto hemos optado por usar la opción =-n= [fn:: "=-n= Redirects stdin
+   from //dev/null/ (actually, prevent reading from stdin)." - /man 1 ssh/] de /ssh/.
+
+   #+BEGIN_SRC bash
+while read linea; do
+    # ...
+
+    # Este mandato ssh consumiría el resto de lineas de
+    # fichero_principal.conf ya que entran al while
+    # mediante entrada estándar (stdin) y no usamos -n.
+    ssh root@remoto "mkdir -p /directorio/auxiliar"
+
+    # ...
+done < fichero_principal.conf
+   #+END_SRC
+
+** Los grupos de las expresiones regulares difieren según LC_*
+   Los grupos de caracteres[fn:: http://en.wikipedia.org/wiki/Regular_expression#Character_classes]
+   en las expresiones regulares difieren en Bash según la configuración regional, /locale/
+   [fn:: http://en.wikipedia.org/wiki/Locale], del sistema. Esto en un principio nos causo
+   problemas ya que en ciertas condiciones hacia que fallaran las expresiones regulares que
+   usábamos.
+
+   Para solucionarlo pasamos de usar expresiones como /[:alnum:]/ por otras como /[a-zA-Z0-9]/.
